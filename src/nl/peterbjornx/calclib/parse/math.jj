@@ -1,0 +1,205 @@
+options {
+    LOOKAHEAD=2;
+    STATIC=false;
+}
+PARSER_BEGIN(MathParser)
+package nl.peterbjornx.calclib.parse;
+
+import nl.peterbjornx.calclib.eval.*;
+import nl.peterbjornx.calclib.eval.type.*;
+import nl.peterbjornx.calclib.math.*;
+import nl.peterbjornx.calclib.code.*;
+import nl.peterbjornx.calclib.ast.*;
+
+import java.util.*;
+
+public class MathParser
+{
+    public Namespace ns;
+    public ParserWrap wrap;
+
+    public ParserWrap getWrap() {
+        if (wrap == null)
+            wrap = new ParserWrap();
+        return wrap;
+    }
+
+    public void setWrap(ParserWrap wrap){
+        this.wrap = wrap;
+    }
+
+    public void setNamespace(Namespace ns) {
+        this.ns = ns;
+    }
+
+    public static void main(String args[]) throws ParseException
+    {
+        MathParser parser = new MathParser(System.in);
+        while (true)
+        {
+            long time = System.currentTimeMillis();
+            parser.parseOneLine();
+            System.out.println("took: "+ (System.currentTimeMillis() - time) );
+        }
+    }
+}
+PARSER_END(MathParser)
+
+SKIP : { " " }
+TOKEN : { < EOL: "\n" | "\r" | "\r\n" > }
+TOKEN : { < PLUS: "+" > }
+TOKEN : { < MINUS: "-" > }
+TOKEN : { < TIMES: "*" | "∙" > }
+TOKEN : { < DIVIDE: "/" > }
+TOKEN : { < EQUALS: "=" > }
+TOKEN : { < CROSS: "%" | "⨯" > }
+TOKEN : { < DIFF: "{"(~["}"])+"}" > }
+TOKEN : { < SDIFF: "'"> }
+TOKEN : { < PDIFF: "∂"> }
+TOKEN : { < CURL: "∇⨯"> }
+TOKEN : { < DIVG: "∇∙"> }
+TOKEN : { < GRAD: "∇"> }
+TOKEN : { < POWER: "^" > }
+TOKEN : { < NUMBER: ((["0"-"9"])+(["."](["0"-"9"])+)?(("e"|"E")("-")?(["0"-"9"])+)?) > }
+TOKEN : { < NAME: ((["a"-"z","A"-"Z"])+) > }
+TOKEN : { < LISTSEP: [",",";"] > }
+
+String diff_expr():
+{
+    String dv;
+    Token t;
+}
+{
+    t= <DIFF> {
+        dv = t.toString();
+        return dv.substring(1,dv.length()-1);
+    }
+}
+
+List<Expression> par_list():
+{
+    List<Expression> list = new LinkedList<Expression>();
+    Expression v, v2;
+}
+{
+    v=expr() (((<LISTSEP> v2=expr()) {
+        list.add(v2);
+    })*
+    )  {
+        list.add(0,v);
+        return list;
+    }
+}
+
+Expression prim_expr():
+{
+    Expression val;
+    List<Expression> parlist;
+    String ex;
+    Token t2,t;
+    ParserWrap wrap = getWrap();
+}
+{
+      t = <NUMBER> {
+            return new ConstantExpression(Double.parseDouble(t.toString()));
+        }
+    | t=<NAME>"(" parlist=par_list()")" {
+            return new FunctionCallExpression(ns, t.toString(), parlist);
+        }
+    | t = <NAME> {
+            return new VariableReferenceExpression(ns, t.toString());
+        }
+    | "(" val=expr() ")" {
+            return val;
+        }
+    | <SDIFF> t=<NAME> <DIVIDE> ex=diff_expr() {
+        return new NumericDifferentialExpression(ns, wrap, ex, t.toString());
+    }
+    | <GRAD> t=<NAME> <DIVIDE> ex=diff_expr() {
+        return new GradientExpression(ns, wrap, ex, t.toString());
+    }
+    | <CURL> t=<NAME> <DIVIDE> ex=diff_expr() {
+        return new CurlExpression(ns, wrap, ex, t.toString());
+    }
+    | <DIVG> t=<NAME> <DIVIDE> ex=diff_expr() {
+        return new DivergenceExpression(ns, wrap, ex, t.toString());
+    }
+    | <PDIFF> t=<NAME> <DIVIDE> t2=<NUMBER> <DIVIDE> ex=diff_expr() {
+        return new PartialDifferentialExpression(ns, wrap, ex, t.toString(), Integer.parseInt(t2.toString()));
+    }
+    | "[" parlist=par_list() "]" {
+            return new VectorExpression(parlist);
+        }
+    | "|" val=expr() "|" {
+            return new UnaryExpression(val, Operation.ABSOLUTE);
+     }
+}
+
+Expression unary_expr():
+{
+    Expression val;
+}
+{
+    "-" val=prim_expr() {
+        return new UnaryExpression(val, Operation.NEGATE);
+    }
+    | val=prim_expr() {
+        return val;
+    }
+}
+
+Expression mult_expr():
+{
+    Expression l,r;
+}
+{
+    l=unary_expr() ( <TIMES> r=mult_expr() {
+        l = new InfixExpression(l, r, Operation.DOT);
+    }
+    |  <POWER> r=mult_expr() {
+              l = new InfixExpression(l, r, Operation.EXPONENTIATE);
+    }
+    |  <CROSS> r=mult_expr() {
+              l = new InfixExpression(l, r, Operation.CROSS);
+    }
+    | <DIVIDE> r=mult_expr() {
+        l = new InfixExpression(l, r, Operation.FRACTION);
+    } )? {
+        return l;
+    }
+}
+
+Expression add_expr():
+{
+    Expression l,r;
+}
+{
+    l=mult_expr() ( <PLUS> r=add_expr() {
+        l = new InfixExpression(l, r, Operation.SUM);
+    }
+    | <MINUS> r=add_expr() {
+        l = new InfixExpression(l, r, Operation.SUBTRACT);
+    } )? {
+        return l;
+    }
+}
+
+Expression expr():
+{
+    Expression v;
+}
+{
+    v=add_expr() {
+        return v;
+    }
+}
+
+void parseOneLine():
+{
+    Expression a;
+}
+{
+    a=expr() <EOL>      { System.out.println(a.evaluate()); }
+  | <EOL>
+  | <EOF>               { System.exit(-1); }
+}
